@@ -1,0 +1,21 @@
+# OCI and SSH credentials
+.oci/
+*.pem
+*.key
+id_*
+known_hosts
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Test and runtime artifacts
+__pycache__/
+*.log
+*.tmp
