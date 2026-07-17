@@ -1,0 +1,36 @@
+#cloud-config
+package_update: true
+package_upgrade: false
+
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - jq
+  - rsync
+
+runcmd:
+  - |
+      set -eux
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
+      . /etc/os-release
+      cat > /etc/apt/sources.list.d/docker.sources <<EOF
+      Types: deb
+      URIs: https://download.docker.com/linux/ubuntu
+      Suites: ${UBUNTU_CODENAME:-$VERSION_CODENAME}
+      Components: stable
+      Architectures: $(dpkg --print-architecture)
+      Signed-By: /etc/apt/keyrings/docker.asc
+      EOF
+      apt-get update
+      apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      systemctl enable --now docker
+      usermod -aG docker ubuntu
+      docker version
+      docker compose version
+      install -d -m 0755 -o ubuntu -g ubuntu /opt/quant-platform
+      install -d -m 0755 -o ubuntu -g ubuntu /opt/quant-platform/data
+
+final_message: "quant-platform base provisioning completed after $UPTIME seconds"
