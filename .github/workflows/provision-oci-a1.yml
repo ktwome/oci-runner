@@ -1,0 +1,102 @@
+name: Provision OCI Always Free A1
+
+on:
+  workflow_dispatch:
+    inputs:
+      validate_only:
+        description: Validate OCI credentials and configuration without launching an instance
+        required: true
+        type: boolean
+        default: true
+  schedule:
+    # UTC. Offset from the top of the hour to reduce scheduler congestion.
+    # Every 15 minutes is at most 2,880 scheduled jobs in a 30-day month.
+    - cron: "7,22,37,52 * * * *"
+
+permissions: {}
+
+concurrency:
+  group: oci-a1-provision
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    # Scheduled polling is opt-in. Manual validation remains available at any time.
+    if: github.event_name == 'workflow_dispatch' || vars.OCI_A1_POLLING_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      provisioned: ${{ steps.provision.outputs.provisioned }}
+      result: ${{ steps.provision.outputs.result }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install OCI CLI
+        run: |
+          python -m pip install --disable-pip-version-check --quiet "oci-cli==3.89.2"
+          oci --version
+
+      - name: Validate configuration or try provisioning
+        id: provision
+        shell: bash
+        env:
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_PRIVATE_KEY: ${{ secrets.OCI_CLI_PRIVATE_KEY }}
+          OCI_SSH_PUBLIC_KEY: ${{ secrets.OCI_SSH_PUBLIC_KEY }}
+          # This repository is intentionally pinned to the tenancy Home Region.
+          OCI_REGION: ap-osaka-1
+          OCI_COMPARTMENT_ID: ${{ vars.OCI_COMPARTMENT_ID }}
+          OCI_SUBNET_ID: ${{ vars.OCI_SUBNET_ID }}
+          OCI_NSG_ID: ${{ vars.OCI_NSG_ID }}
+          OCI_IMAGE_ID: ${{ vars.OCI_IMAGE_ID }}
+          OCI_INSTANCE_NAME: ${{ vars.OCI_INSTANCE_NAME }}
+          VALIDATE_ONLY: ${{ inputs.validate_only || false }}
+        run: bash infra/oci/provision-a1.sh
+
+      - name: Write run summary
+        if: always()
+        shell: bash
+        env:
+          RESULT: ${{ steps.provision.outputs.result }}
+        run: |
+          {
+            echo "## OCI A1 provisioning"
+            echo
+            echo "- Result: \`${RESULT:-workflow_failed}\`"
+            echo "- Instance details: check the OCI Console"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  disable-polling:
+    needs: provision
+    if: >-
+      needs.provision.outputs.provisioned == 'true' &&
+      (github.event_name == 'schedule' || inputs.validate_only == false)
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Disable polling after an instance exists
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -L --fail --silent --show-error \
+            --request PUT \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/provision-oci-a1.yml/disable"
+          echo "Polling workflow disabled because the target instance exists."
